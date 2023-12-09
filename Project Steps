@@ -164,7 +164,7 @@ you can click on :node and edit and see query(promql) through which it is coming
 
 25)You can visualize Java application after deploying it also:-
 
-git clone https://github.com/praveen1994dec/kubernetes_java_deployment.git
+git clone https://github.com/abhigit84/3-Microservice-deploy-on-minikube-using-Docker-and-Manifest-files.git
 
 cd kubernetes_java_deployment
 

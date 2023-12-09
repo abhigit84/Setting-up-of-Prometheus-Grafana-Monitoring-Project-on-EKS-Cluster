@@ -1,0 +1,196 @@
+Same dashboard is there in Walmart
+region:us-east-1
+t2.medium
+ubuntu
+sudo su
+
+1)GotoIAM->Createrole->SelectEC2->Give Full admin access(eks-monitor-singam)
+
+2)update in Ec2-actions-security-update iam role created above for awscli rights.
+
+3)Install AwsCLI and Configure:-
+
+sudo apt install unzip
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+4)Install and setup kubectl
+
+curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+
+chmod +x ./kubectl
+
+sudo mv ./kubectl /usr/local/bin 
+
+kubectl version
+
+5)Install and Setup eksctl
+
+a. Download and extract the latest release
+b. Move the extracted binary to /usr/local/bin
+c. Test that your eksctl installation was successful
+
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+sudo mv /tmp/eksctl /usr/local/bin
+
+eksctl version
+
+6)Install Helm Chart
+
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+chmod 700 get_helm.sh
+./get_helm.sh
+
+helm version
+
+7)Create an Amazon EKS Cluster using eksctl
+
+eksctl create cluster --name eks2 --version 1.24 --region us-east-1 --zones=us-east-1b,us-east-1c --nodegroup-name worker-nodes --node-type t2.medium --nodes 2 --nodes-min 2 --nodes-max 3
+
+if any error run below or i would recommend always run this:-
+
+aws eks update-kubeconfig --region us-east-1 --name eks2
+
+8)Install the Kubernetics metrics server(We do this as Prometheus will extract data from Metrics Server,components.yaml is kubernetes file)
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+9)Verify that the metrics-server deployment is running the desired number of pods with the following command(metrics-server is deployment name and kube-system is default namespace in K8S)
+
+kubectl get deployment metrics-server -n kube-system
+
+10)Install Prometheus(Now we will install the Prometheus using the helmchart,Add Prometheus helmchart repository as helm has repo)
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+
+helm repo update
+helm repo list
+
+11)Create Prometheus namespace 
+
+kubectl create namespace prometheus
+
+u can see all namespace by:kubectl get ns
+
+12)Install prometheus in this namespace(namespace is imaginary and we deploy the prometheus pod on to this imaginary space,persistent volume is space in which if pod dead this space will get attached to other pod like docker volumes u can say)
+
+helm install prometheus prometheus-community/prometheus --namespace prometheus --set alertmanager.persistentVolume.storageClass="gp2" --set server.persistentVolume.storageClass="gp2"
+
+13)Create IAM OIDC Provider(We do this as Ec2 access to EKS and from EKS also it needs to talk to EC2 and thats why we create OpenId Connect..we use these shell scripts create id,pass id,aatach openid to our cluster)
+
+oidc_id=$(aws eks describe-cluster --name eks2 --region us-east-1 --query "cluster.identity.oidc.issuer" --output text | cut -d '/' -f 5)
+
+aws iam list-open-id-connect-providers | grep $oidc_id | cut -d "/" -f4
+
+eksctl utils associate-iam-oidc-provider --cluster eks2 --approve --region us-east-1
+
+14)Create IAM service account with role(This service account is to access ebs volume and Backend systems,create iam role for service accounts under kube-system so that kubernetes can talk to amazon systems):-
+
+eksctl create iamserviceaccount --name ebs-csi-controller-sa --namespace kube-system --cluster eks2 --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy --approve --role-only --role-name AmazonEKS_EBS_CSI_DriverRole --region us-east-1
+
+15)Then attach role to eks by running the following command(so basically just like ec2 u gave iam role,u give kubernetes also a iam role so that both communicate with each other):-
+
+Go to IAM-See role created with name-AmazonEKS_EBS_CSI_DriverRole-Click on it-copy account no-027183218661 from arn (and use in below command)-arn:aws:iam::027183218661:role/AmazonEKS_EBS_CSI_DriverRole
+
+
+eksctl create addon --name aws-ebs-csi-driver --cluster eks2 --service-account-role-arn arn:aws:iam::027183218661:role/AmazonEKS_EBS_CSI_DriverRole --force --region us-east-1
+
+16)kubectl get pods -n prometheus
+
+i got error so if any error or u starting work on next day suppose u can run -
+aws eks update-kubeconfig --region us-east-1 --name eks2
+and error will be solved.
+
+kubectl get pods -n prometheus
+
+u will see all components like we saw in theory of prometheus and diagram.Please check if all pods up..earlier service account was not added so they were not up.
+so service account plays important role in data sharing or communication between ec2 and eks and vice versa.
+
+17)View the Prometheus dashboard by forwarding the deployment ports
+
+kubectl port-forward deployment/prometheus-server 9090:9090 -n prometheus
+
+18)Now go to ec2-security groups-edit inbound rules-allow all traffic-anywhere on IPV4-save
+
+Open different browser and connect to your EC2 instance and run 
+
+sudo su
+
+curl localhost:9090/graph
+
+u can see some output and so u can see promethues running.
+
+19)Install Grafana
+
+helm repo add grafana https://grafana.github.io/helm-charts
+
+helm repo update
+
+20)Create a namespace grafana
+
+kubectl create namespace grafana
+
+21)Install the Grafana(This command will create the Grafana service with an external loadbalancer to get the publicview,also EKS!sAWSome will be password for grafana and username will be admin)
+
+helm install grafana grafana/grafana --namespace grafana --set persistence.storageClassName="gp2" --set persistence.enabled=true --set adminPassword='EKS!sAWSome' --set service.type=LoadBalancer
+
+22)Verify the Grafana installation by using the following kubectl command:-
+ 
+kubectl get pods -n grafana
+
+kubectl get service -n grafana
+
+Copy the EXTERNAL-IP(nothing but dns of lb-adf9830117467453a9beebf2de11425a-1231219938.us-east-1.elb.amazonaws.com) and paste in browser from above service command 
+user id:admin
+password:EKS!sAWSome
+
+23)Add Prometheus as data source to Grafana (as Grafana uses external db and does not have own db):-
+
+Grafana dashboard-add datasource-select the prometheus-configure end point of prometheus in Connection-promethues server url textbox-
+http://prometheus-server.prometheus.svc.cluster.local
+save and test.
+
+24)Import Grafana dashboards from Grafana Labs:-
+
+Go to left side-click on dashboards-Click on new-import
+in box-give id for import dashboard-6417-Load and select data source as Prometheus-1(this name it saved in earlier step).
+
+you can see the whole cluster dashboard.
+You can type grafana or prometheus in Namespace box on top and see its deployments,pods etc.
+So you can search by Namespace and load and see on dashboard
+you can click on :node and edit and see query(promql) through which it is coming
+
+25)You can visualize Java application after deploying it also:-
+
+git clone https://github.com/praveen1994dec/kubernetes_java_deployment.git
+
+cd kubernetes_java_deployment
+
+cd kubernetes
+
+kubectl apply -f shopfront-service.yaml
+
+kubectl get deployment
+
+kubectl get pods
+
+kubectl logs shopfront-7868468c56-vbng8
+
+Now you can see in grafana dashboard-search in namespace-default -now all dashboard will come for shopfront application or microservice.
+
+Note:you created this deployment in default namespace as u dint specify namespace
+
+Note:shopfront-7868468c56-vbng8 is pod name from kubectl get pods output.
+
+
+26)Delete Cluster:
+
+eksctl delete cluster --name eks2 --region us-east-1
+
+if u get any error-go to cloudformation-stacks-delete here manually
+
+
+
+
